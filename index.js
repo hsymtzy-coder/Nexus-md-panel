@@ -1,9 +1,13 @@
+
 const pino = require("pino");
+const qrcode = require("qrcode-terminal");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason
 } = require("@whiskeysockets/baileys");
+
+let reconnecting = false;
 
 async function startBot() {
   const { state, saveCreds } =
@@ -16,47 +20,63 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
+  sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
+    if (qr) {
+      console.log("QR login NEXUS MD:");
+      qrcode.generate(qr, { small: true });
+      console.log("Jangan bagikan QR ini kepada siapa pun.");
+    }
+
     if (connection === "open") {
+      reconnecting = false;
       console.log("NEXUS MD berhasil terhubung!");
     }
 
-    if (connection === "close") {
+    if (connection === "close" && !reconnecting) {
       const code = lastDisconnect?.error?.output?.statusCode;
 
       if (code !== DisconnectReason.loggedOut) {
-        setTimeout(startBot, 5000);
+        reconnecting = true;
+        setTimeout(() => {
+          reconnecting = false;
+          startBot().catch(console.error);
+        }, 5000);
       } else {
-        console.log("WhatsApp logout. Hubungkan ulang.");
+        console.log("Sesi logout. Hubungkan ulang secara aman.");
       }
     }
   });
 
   sock.ev.on("messages.upsert", async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg?.message || msg.key.fromMe) return;
+    for (const msg of messages) {
+      if (!msg?.message || msg.key.fromMe) continue;
 
-    const jid = msg.key.remoteJid;
-    if (!jid || jid === "status@broadcast") return;
+      const jid = msg.key.remoteJid;
+      if (!jid || jid === "status@broadcast") continue;
 
-    const body =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      "";
+      const body =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        msg.message.imageMessage?.caption ||
+        "";
 
-    const command = body.trim().toLowerCase();
+      const command = body.trim().toLowerCase();
 
-    const replies = {
-      ".menu": "🤖 NEXUS MD\n.menu\n.ping\n.info",
-      ".ping": "Pong! 🏓 NEXUS MD aktif.",
-      ".info": "NEXUS MD\nBot WhatsApp sederhana\nVersi 1.0.0"
-    };
+      const replies = {
+        ".menu": "🤖 NEXUS MD\n\n.menu\n.ping\n.info\n\nBot sederhana.",
+        ".ping": "Pong! 🏓 NEXUS MD aktif.",
+        ".info": "NEXUS MD\nVersi 1.0.0\nBot WhatsApp sederhana."
+      };
 
-    if (replies[command]) {
-      await sock.sendMessage(jid, { text: replies[command] });
+      if (replies[command]) {
+        try {
+          await sock.sendMessage(jid, { text: replies[command] });
+        } catch (err) {
+          console.error("Gagal mengirim pesan:", err.message);
+        }
+      }
     }
   });
 }
 
 startBot().catch(console.error);
-    
